@@ -76,6 +76,22 @@ if (!annoCols.some((c) => c.name === 'stroke_count')) {
 // Note: annotations.image_id is already the PRIMARY KEY, so the offset aggregate's
 // JOIN from images down to annotations is already indexed — no extra index needed.
 
+// ── migration: S3 storage metadata. storage_provider defaults to 'local' so every
+// pre-existing row (written before S3 support existed) keeps resolving its image
+// bytes from local disk; only newly-uploaded rows get storage_provider = 's3'. ──
+const storageCols = db.prepare('PRAGMA table_info(images)').all() as Array<{ name: string }>;
+if (!storageCols.some((c) => c.name === 'storage_provider')) {
+  db.exec("ALTER TABLE images ADD COLUMN storage_provider TEXT NOT NULL DEFAULT 'local';");
+}
+if (!storageCols.some((c) => c.name === 's3_key_prefix')) {
+  // Prefix only (e.g. "uploads/{sessionId}/{imageId}") — the three variant keys live
+  // under it, so a single prefix delete on cleanup removes original/mobile/thumb together.
+  db.exec('ALTER TABLE images ADD COLUMN s3_key_prefix TEXT;');
+}
+if (!storageCols.some((c) => c.name === 'mime_type')) {
+  db.exec("ALTER TABLE images ADD COLUMN mime_type TEXT NOT NULL DEFAULT 'image/webp';");
+}
+
 // Migrate orphaned images (no session_id) into a legacy session.
 const orphans = (
   db.prepare('SELECT COUNT(*) AS n FROM images WHERE session_id IS NULL').get() as { n: number }

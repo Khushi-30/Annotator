@@ -24,6 +24,19 @@ export interface ImageMeta {
   bytes: number;
   sortIndex: number;
   uploadDate: string;
+  mimeType: string;
+}
+
+export interface UploadFailure {
+  filename: string;
+  error: string;
+}
+
+// POST /api/images/upload response: per-batch results, since a single failed file
+// (corrupt image, transient S3 error) shouldn't fail the other 19+ files in the chunk.
+export interface UploadResponse {
+  created: ImageMeta[];
+  failed: UploadFailure[];
 }
 
 // 3 annotation "classes" -> 3 colors. Index maps to COLORS on the client.

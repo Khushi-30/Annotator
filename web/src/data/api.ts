@@ -1,6 +1,6 @@
 import type {
   AnnotationDTO, AnnotationOffsetResponse, AnnotationsBulkResponse, ImageMeta,
-  ImagePositionResponse, Paginated, Session, SyncResponse,
+  ImagePositionResponse, Paginated, Session, SyncResponse, UploadResponse,
 } from '../../../shared/types';
 
 export async function fetchSessions(): Promise<Session[]> {
@@ -77,7 +77,7 @@ export async function fetchAnnotationOffset(
   return data.offset;
 }
 
-export async function uploadImages(files: File[], sessionId: string): Promise<ImageMeta[]> {
+export async function uploadImages(files: File[], sessionId: string): Promise<UploadResponse> {
   const fd = new FormData();
   files.forEach((f) => fd.append('files', f));
   const r = await fetch(`/api/images/upload?sessionId=${encodeURIComponent(sessionId)}`, {

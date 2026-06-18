@@ -1,9 +1,11 @@
 import type { FastifyInstance } from 'fastify';
 import { nanoid } from 'nanoid';
 import { db } from '../db/index.ts';
+import { deleteImageStorage, deleteSessionS3Storage } from '../services/cleanup.ts';
+import { displayUrl } from '../services/s3.ts';
 import type { Session } from '../../../shared/types.ts';
 
-function rowToSession(r: any): Session {
+async function rowToSession(r: any): Promise<Session> {
   return {
     id: r.id,
     title: r.title,
@@ -14,7 +16,9 @@ function rowToSession(r: any): Session {
     annotationCount: r.annotation_count ?? 0,
     lastViewedImageId: r.last_viewed_image_id ?? null,
     lastActivityAt: r.last_activity_at,
-    previewThumbUrl: r.preview_thumb_url ?? null,
+    previewThumbUrl: r.preview_thumb_url
+      ? await displayUrl(r.preview_thumb_url, r.preview_thumb_storage_provider)
+      : null,
   };
 }
 
@@ -29,7 +33,9 @@ const SESSION_QUERY = `
       THEN i.id END)                                                          AS completed_images,
     COALESCE(SUM(json_array_length(a.drawing_data, '$.strokes')), 0)         AS annotation_count,
     (SELECT thumb_url FROM images
-     WHERE session_id = s.id ORDER BY sort_index LIMIT 1)                    AS preview_thumb_url
+     WHERE session_id = s.id ORDER BY sort_index LIMIT 1)                    AS preview_thumb_url,
+    (SELECT storage_provider FROM images
+     WHERE session_id = s.id ORDER BY sort_index LIMIT 1)                    AS preview_thumb_storage_provider
   FROM sessions s
   LEFT JOIN images      i ON i.session_id = s.id
   LEFT JOIN annotations a ON a.image_id   = i.id
@@ -47,7 +53,7 @@ export default async function sessionRoutes(app: FastifyInstance) {
   // List all sessions ordered by most recently active
   app.get('/api/sessions', async () => {
     const rows = db.prepare(`${SESSION_QUERY} ORDER BY s.last_activity_at DESC`).all();
-    return rows.map(rowToSession);
+    return Promise.all(rows.map(rowToSession));
   });
 
   // Create a new session; returns the session with zero counts
@@ -86,10 +92,34 @@ export default async function sessionRoutes(app: FastifyInstance) {
     return { ok: true };
   });
 
-  // Delete a session (cascades to images + annotations via FK)
+  // Delete a session (cascades to images + annotations via FK). Storage rows are
+  // read before the cascade fires; S3-backed images are removed with a single
+  // prefix delete (uploads/{sessionId}/...), local-backed legacy images are removed
+  // one-by-one since they aren't stored under a per-session folder.
   app.delete('/api/sessions/:id', async (req) => {
     const { id } = req.params as { id: string };
+    const rows = db.prepare(
+      'SELECT storage_provider, s3_key_prefix, original_url, mobile_url, thumb_url FROM images WHERE session_id = ?'
+    ).all(id) as Array<{
+      storage_provider: string; s3_key_prefix: string | null;
+      original_url: string; mobile_url: string; thumb_url: string;
+    }>;
+
     db.prepare('DELETE FROM sessions WHERE id = ?').run(id);
+
+    try {
+      const hasS3Rows = rows.some((r) => r.storage_provider === 's3');
+      const localRows = rows.filter((r) => r.storage_provider !== 's3');
+      await Promise.all([
+        hasS3Rows ? deleteSessionS3Storage(id) : Promise.resolve(),
+        ...localRows.map((r) => deleteImageStorage({
+          storageProvider: r.storage_provider, s3KeyPrefix: r.s3_key_prefix,
+          originalUrl: r.original_url, mobileUrl: r.mobile_url, thumbUrl: r.thumb_url,
+        })),
+      ]);
+    } catch (err) {
+      req.log.warn({ err, sessionId: id }, 'failed to clean up session storage');
+    }
     return { ok: true };
   });
 }

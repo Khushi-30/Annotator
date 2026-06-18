@@ -46,14 +46,14 @@ export default function SessionCard({ session, onClick, onDelete }: Props) {
           Last activity: {formatDate(session.lastActivityAt)}
         </div>
       </div>
-      {/* <button
+      <button
         className="session-delete-btn"
         onClick={(e) => { e.stopPropagation(); onDelete(); }}
         aria-label="Delete session"
         title="Delete session"
       >
         ×
-      </button> */}
+      </button>
     </div>
   );
 }
